@@ -31,6 +31,15 @@ tr.now td{background:var(--hot)}
 .pos{color:var(--good)}.neg{color:var(--bad)}.mute{color:var(--mute)}
 .tag{display:inline-block;border:1px solid var(--line);border-radius:4px;padding:0 5px;font-size:11px;color:var(--mute)}
 .empty{color:var(--mute);padding:8px 0}
+.side{display:inline-block;border-radius:4px;padding:1px 7px;font-size:12px;font-weight:700;color:#fff}
+.side.long{background:var(--good)}.side.short{background:var(--bad)}
+#cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px;margin:0 0 12px}
+.card{border:1px solid var(--line);border-left:4px solid var(--good);border-radius:8px;padding:10px 12px}
+.card.short{border-left-color:var(--bad)}
+.card h3{margin:0 0 6px;font-size:15px;display:flex;gap:8px;align-items:center}
+.card dl{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;margin:0;font-variant-numeric:tabular-nums}
+.card dt{color:var(--mute)}.card dd{margin:0;text-align:right;font-weight:600}
+.card small{display:block;color:var(--mute);margin-top:6px}
 </style>
 </head>
 <body>
@@ -49,9 +58,13 @@ tr.now td{background:var(--hot)}
 
 <section>
   <h2>Signals</h2>
-  <p class="sub">Long when an alt drops at least 6σ and 100 bp relative to BTC over 5, 10 or 15 minutes while BTC is also moving (|z| ≥ 2). Enter at the next bar's open; target and stop are each 1× the drop; exit after 15 minutes. Result is net of fees and slippage.</p>
+  <p class="sub">Every signal gives the side, entry, take profit and stop loss. The rule is long-only: short signals lost money in every backtest, so none are generated. Long when an alt drops at least 6σ and 100 bp relative to BTC over 5, 10 or 15 minutes while BTC is also moving (|z| ≥ 2). Enter at the next bar's open; target and stop are each 1× the drop; exit after 15 minutes. Result is net of fees and slippage.</p>
+  <h2>Live now</h2>
+  <div id="cards"></div>
+  <div id="cardsEmpty" class="empty">No live signal on the last closed bar.</div>
+  <h2>Recent signals</h2>
   <div class="scroll"><table id="sig"><thead><tr>
-    <th>Time (UTC)</th><th class="l">Symbol</th><th>Lookback</th><th>Drop</th><th>z</th><th>BTC z</th><th>Entry</th><th>Target</th><th>Stop</th><th class="l">Outcome</th><th>Net</th>
+    <th>Time (UTC)</th><th class="l">Symbol</th><th class="l">Side</th><th>Entry</th><th>Take profit</th><th>Stop loss</th><th>Lookback</th><th>Move</th><th>z</th><th>BTC z</th><th class="l">Outcome</th><th>Net</th>
   </tr></thead><tbody></tbody></table></div>
   <div id="sigEmpty" class="empty">No signals yet.</div>
 </section>
@@ -208,7 +221,7 @@ function compute(){
       for(let i=0;i<n;i++){
         const mag = Math.abs(f.resid[i]);
         if(f.rz[i] <= -CFG.z && mag*1e4 >= CFG.minBp && Math.abs(f.fz[i]) >= CFG.fz)
-          signals.push({time:d.t[i], symbol:sym, k, moveBp:f.resid[i]*1e4, z:f.rz[i], btcZ:f.fz[i], isNow:i === n-1, ...outcome(d, i, mag, sym)});
+          signals.push({time:d.t[i], symbol:sym, side:"LONG", k, moveBp:f.resid[i]*1e4, z:f.rz[i], btcZ:f.fz[i], isNow:i === n-1, ...outcome(d, i, mag, sym)});
       }
     }
     watch.push(row);
@@ -226,7 +239,11 @@ const utc = t => new Date(t).toISOString().slice(5,16).replace("T"," ");
 const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 function render(res){
   const sb = $("sig").tBodies[0];
-  sb.innerHTML = res.signals.slice(0,200).map(s => `<tr class="${s.isNow?"now":""}"><td>${utc(s.time)}</td><td class="l">${esc(s.symbol)}</td><td>${s.k}m</td><td>${num(s.moveBp,0)} bp</td><td>${num(s.z)}</td><td>${num(s.btcZ)}</td><td>${px(s.entry ?? s.ref)}${s.entry?"":' <span class="tag">ref</span>'}</td><td>${px(s.tp)}</td><td>${px(s.sl)}</td><td class="l">${s.state}</td><td class="${s.net>0?"pos":s.net<0?"neg":"mute"}">${s.net===undefined?"–":num(s.net*1e4,0)+" bp"}</td></tr>`).join("");
+  const side = s => `<span class="side ${s.side.toLowerCase()}">${s.side}</span>`;
+  const live = res.signals.filter(s => s.isNow);
+  $("cards").innerHTML = live.map(s => `<div class="card ${s.side.toLowerCase()}"><h3>${side(s)} ${esc(s.symbol)}</h3><dl><dt>Entry</dt><dd>≈ ${px(s.ref)}</dd><dt>Take profit</dt><dd>${px(s.tp)}</dd><dt>Stop loss</dt><dd>${px(s.sl)}</dd><dt>Time exit</dt><dd>${CFG.hold} min</dd></dl><small>${s.k}m move ${num(s.moveBp,0)} bp, z ${num(s.z)}. Enter at market on the next bar; entry is the last close, so levels shift slightly with your fill.</small></div>`).join("");
+  $("cardsEmpty").style.display = live.length ? "none" : "";
+  sb.innerHTML = res.signals.slice(0,200).map(s => `<tr class="${s.isNow?"now":""}"><td>${utc(s.time)}</td><td class="l">${esc(s.symbol)}</td><td class="l">${side(s)}</td><td>${px(s.entry ?? s.ref)}${s.entry?"":' <span class="tag">ref</span>'}</td><td>${px(s.tp)}</td><td>${px(s.sl)}</td><td>${s.k}m</td><td>${num(s.moveBp,0)} bp</td><td>${num(s.z)}</td><td>${num(s.btcZ)}</td><td class="l">${s.state}</td><td class="${s.net>0?"pos":s.net<0?"neg":"mute"}">${s.net===undefined?"–":num(s.net*1e4,0)+" bp"}</td></tr>`).join("");
   $("sigEmpty").style.display = res.signals.length ? "none" : "";
   $("sigEmpty").textContent = "No signals in the loaded window (about the last 24 hours).";
   const z = v => `<td class="${v <= -CFG.z ? "neg" : ""}">${num(v)}</td>`;
