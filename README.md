@@ -33,6 +33,7 @@ No API key is needed.
 
 Open `scanner.html` in a browser, pick Binance or Bybit and press Start. It fetches public klines directly from
 the exchange in your browser, rescans just after each minute closes, and lists signals with entry, target, stop
-and the outcome of past signals in the loaded window (about 24 hours). It uses the same rule and maths as
+and the outcome of past signals in the loaded window (about 24 hours). Signals are LONG or SHORT, on crypto,
+stock and metal perps, and each one shows the held-out backtest record for its type. It uses the same rule and maths as
 `scalp/strategies.py`; on cached data its signals match the Python scanner exactly. If the exchange blocks your
 region or network the page says so.

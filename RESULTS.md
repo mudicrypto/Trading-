@@ -54,6 +54,25 @@ flush conditions that trigger this rule. One day (2026-10-08) lost more than the
 The in-sample profit was concentrated in a few market-wide crash days (the best 3 days were 37-67% of the total).
 That did not repeat. The honest reading is that this is not a reliable edge.
 
+## Long and short on every group (what the scanners now show)
+
+Same rule as above, mirrored for shorts (sell when the residual is at least 6 standard deviations UP), on every
+asset group. Net per trade, 5/10/15-minute lookbacks combined (`research/shorts.py`):
+
+| Group | Side | Design data | Held-out | Held-out trades | Held-out win % |
+|---|---|---|---|---|---|
+| Crypto | Long | +65.6 bp | +2.2 bp | 1767 | 50.4 |
+| Crypto | Short | -85.3 bp | -29.0 bp | 854 | 41.2 |
+| MSTR/COIN/HOOD | Long | -10.6 bp | +13.9 bp | 275 | 56.7 |
+| MSTR/COIN/HOOD | Short | -21.5 bp | -8.4 bp | 328 | 47.9 |
+| Stocks | Long | -14.7 bp | -10.0 bp | 397 | 40.8 |
+| Stocks | Short | -5.7 bp | -20.6 bp | 466 | 41.8 |
+| Metals | Long | +15.6 bp | -26.3 bp | 4 | 0 |
+| Metals | Short | -19.8 bp | -113.8 bp | 1 | 0 |
+
+Shorts lose in every group. The MSTR/COIN/HOOD long result is positive on held-out data but negative on the design
+data, so it is not evidence of an edge.
+
 ## Caveats
 
 - The universe is today's liquid perps, so there is survivorship bias in favour of the results.
@@ -70,3 +89,4 @@ That did not repeat. The honest reading is that this is not a reliable edge.
     python research/explore2.py     # lead-lag, residuals, stock sessions
     cd research && python grid1.py && python grid2.py && python grid3.py && python grid4.py && python grid5.py
     cd research && python oos.py    # frozen rule, in-sample vs out-of-sample
+    cd research && python shorts.py # long and short, every group

@@ -7,7 +7,8 @@
 It only READS public market data and PRINTS signals; it never places orders and needs no API key.
 Signals come from scalp.strategies (the exact functions the backtest uses).
 
-IMPORTANT: the frozen rule did NOT hold up out-of-sample (see RESULTS.md). Treat output as research alerts.
+Signals are long AND short on every asset class. Only crypto longs were ever positive in-sample, and even
+they showed no edge out-of-sample; shorts lost everywhere (see RESULTS.md). Treat output as research alerts.
 """
 from __future__ import annotations
 
@@ -21,7 +22,7 @@ import pandas as pd
 import requests
 
 from .factors import factor_logret
-from .strategies import FROZEN, DAY, SnapbackParams, residual_features, snapback_signals
+from .strategies import BOTH_SIDES, FROZEN, DAY, SnapbackParams, residual_features, snapback_signals
 from .universe import ALL, asset_class
 
 BINANCE_URL = os.environ.get("BINANCE_FAPI_URL", "https://fapi.binance.com")
@@ -70,13 +71,13 @@ def fetch_bybit(symbol: str, bars: int = NEED) -> pd.DataFrame:
     return _frame(out)
 
 
-def scan(bars: dict[str, pd.DataFrame], params=FROZEN, at: pd.Timestamp | None = None) -> list[dict]:
+def scan(bars: dict[str, pd.DataFrame], params=BOTH_SIDES, at: pd.Timestamp | None = None) -> list[dict]:
     """Signals fired by the last CLOSED bar (or by the bar at `at`). `bars` maps symbol -> 1m OHLCV."""
     found = []
     for sym, df in bars.items():
-        if asset_class(sym) != "crypto" or sym == "BTCUSDT":   # only the group with an in-sample edge
-            continue
         f = factor_logret(sym, bars)
+        if f is None:                                         # factor itself (BTC, gold): nothing to fade against
+            continue
         t = df.index[-1] if at is None else at
         for p in params:
             feat = residual_features(df, f, p.k)
@@ -133,13 +134,13 @@ def replay(day: str, symbols: list[str]) -> list[dict]:
     bars = {s: load_binance(s, start, d0.strftime("%Y-%m")).loc[d0 - pd.Timedelta(days=3):d1] for s in symbols}
     out = []
     for sym, df in bars.items():
-        if asset_class(sym) != "crypto" or sym == "BTCUSDT":
+        if factor_logret(sym, bars) is None:
             continue
-        for p in FROZEN:
+        for p in BOTH_SIDES:
             feat = residual_features(df, factor_logret(sym, bars), p.k)
             sg = snapback_signals(feat, p)
             for t in sg.index[sg.index >= d0]:
-                out += scan({sym: df.loc[:t], "BTCUSDT": bars["BTCUSDT"].loc[:t]}, params=(p,))
+                out += scan({**{s: b.loc[:t] for s, b in bars.items() if s != sym}, sym: df.loc[:t]}, params=(p,))
     out.sort(key=lambda s: s["time"])
     return out
 
@@ -147,7 +148,7 @@ def replay(day: str, symbols: list[str]) -> list[dict]:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--venue", choices=["binance", "bybit"], default="binance")
-    ap.add_argument("--symbols", nargs="*", default=[s for s in ALL if asset_class(s) == "crypto"])
+    ap.add_argument("--symbols", nargs="*", default=ALL)
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--replay", metavar="YYYY-MM-DD")
     a = ap.parse_args()

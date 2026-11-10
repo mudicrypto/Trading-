@@ -31,6 +31,8 @@ tr.now td{background:var(--hot)}
 .pos{color:var(--good)}.neg{color:var(--bad)}.mute{color:var(--mute)}
 .tag{display:inline-block;border:1px solid var(--line);border-radius:4px;padding:0 5px;font-size:11px;color:var(--mute)}
 .empty{color:var(--mute);padding:8px 0}
+details{margin:0 0 12px}summary{cursor:pointer;color:var(--accent)}
+.bt{font-size:12px;color:var(--mute)}
 .side{display:inline-block;border-radius:4px;padding:1px 7px;font-size:12px;font-weight:700;color:#fff}
 .side.long{background:var(--good)}.side.short{background:var(--bad)}
 #cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px;margin:0 0 12px}
@@ -46,25 +48,28 @@ tr.now td{background:var(--hot)}
 <main>
 <h1>Dislocation Scanner</h1>
 <p class="sub">Binance USDT-M futures and Bybit linear perps. Reads public 1-minute klines in your browser; places no orders, needs no API key.</p>
-<p class="warn"><strong>Research alerts only.</strong> This rule made money on the design data but showed no edge on held-out data (+2 bp per trade, t = 0.35). See RESULTS.md. Do not trade it with real money.</p>
+<p class="warn"><strong>Research alerts only.</strong> No signal type here has a proven edge. Crypto longs made money on the design data but about nothing on held-out data; shorts lost money in every group. Each signal shows its group's backtest record. See RESULTS.md. Do not trade this with real money.</p>
 
 <div class="bar">
   <select id="venue" aria-label="Venue"><option value="binance">Binance futures</option><option value="bybit">Bybit linear</option></select>
   <button id="go" class="primary">Start</button>
   <label><input type="checkbox" id="sound"> Sound on new signal</label>
-  <label><input type="checkbox" id="extra"> Show stock and metal perps (watch only)</label>
+  <label><input type="checkbox" id="extra" checked> Include stock and metal perps</label>
   <span id="status">Idle.</span>
 </div>
 
 <section>
   <h2>Signals</h2>
-  <p class="sub">Every signal gives the side, entry, take profit and stop loss. The rule is long-only: short signals lost money in every backtest, so none are generated. Long when an alt drops at least 6σ and 100 bp relative to BTC over 5, 10 or 15 minutes while BTC is also moving (|z| ≥ 2). Enter at the next bar's open; target and stop are each 1× the drop; exit after 15 minutes. Result is net of fees and slippage.</p>
+  <p class="sub"><b>LONG</b> when a symbol drops at least 6σ and 100 bp relative to its factor over 5, 10 or 15 minutes; <b>SHORT</b> when it rises by the same amount. The factor must also be moving (|z| ≥ 2). Factor: BTC for crypto and MSTR/COIN/HOOD, the other stock perps for stocks, gold for silver. Enter at the next bar's open; take profit and stop loss are each 1× the move; exit after 15 minutes. Net is after fees and slippage.</p>
+  <details><summary>Backtest record per signal type (net per trade, 5/10/15-min combined)</summary>
+  <div class="scroll"><table id="bt"><thead><tr><th class="l">Group</th><th class="l">Side</th><th>Design data<br>(to Jun 2026)</th><th>Held-out<br>(Jul–Oct 2026)</th><th>Held-out trades</th><th>Held-out win %</th></tr></thead><tbody></tbody></table></div>
+  </details>
   <h2>Live now</h2>
   <div id="cards"></div>
   <div id="cardsEmpty" class="empty">No live signal on the last closed bar.</div>
   <h2>Recent signals</h2>
   <div class="scroll"><table id="sig"><thead><tr>
-    <th>Time (UTC)</th><th class="l">Symbol</th><th class="l">Side</th><th>Entry</th><th>Take profit</th><th>Stop loss</th><th>Lookback</th><th>Move</th><th>z</th><th>BTC z</th><th class="l">Outcome</th><th>Net</th>
+    <th>Time (UTC)</th><th class="l">Symbol</th><th class="l">Side</th><th>Entry</th><th>Take profit</th><th>Stop loss</th><th>Lookback</th><th>Move</th><th>z</th><th>Factor z</th><th class="l">Class</th><th class="l">Outcome</th><th>Net</th><th class="l">Held-out record</th>
   </tr></thead><tbody></tbody></table></div>
   <div id="sigEmpty" class="empty">No signals yet.</div>
 </section>
@@ -88,6 +93,12 @@ const CRYPTO = MAJORS.concat(ALTS);
 const CRYPTO_STOCKS = ["MSTRUSDT","COINUSDT","HOODUSDT"];
 const STOCKS = ["TSLAUSDT","NVDAUSDT","AAPLUSDT","METAUSDT","GOOGLUSDT","MSFTUSDT","AMZNUSDT"];
 const METALS = ["XAUUSDT","XAGUSDT"];
+// from research/shorts.py: [design mean bp, held-out mean bp, held-out trades, held-out win %]
+const RECORD = {
+  "crypto|LONG":[65.6,2.2,1767,50.4], "crypto|SHORT":[-85.3,-29.0,854,41.2],
+  "crypto_stock|LONG":[-10.6,13.9,275,56.7], "crypto_stock|SHORT":[-21.5,-8.4,328,47.9],
+  "stock|LONG":[-14.7,-10.0,397,40.8], "stock|SHORT":[-5.7,-20.6,466,41.8],
+  "metal|LONG":[15.6,-26.3,4,0], "metal|SHORT":[-19.8,-113.8,1,0]};
 const BYBIT_NAME = {"1000SHIBUSDT":"SHIB1000USDT"};
 const Q = new URLSearchParams(location.search);
 const BASE = {binance: Q.get("binance") || "https://fapi.binance.com", bybit: Q.get("bybit") || "https://api.bybit.com"};
@@ -195,17 +206,19 @@ function features(d, fmap, k){
   return {resid, rz, fz};
 }
 // outcome with the backtest's rules: next-bar-open entry, stop first, strict target, time stop
-function outcome(d, i, mag, sym){
+function outcome(d, i, mag, sym, sd){            // sd = +1 long, -1 short
   const e = i + 1, slip = slipBp(sym)/1e4, tk = (venue === "bybit" ? 5.5 : 5)/1e4, mk = CFG.maker/1e4;
-  if(e >= d.t.length) return {state:"pending", ref:d.c[i], tp:d.c[i]*(1+mag), sl:d.c[i]*(1-mag)};
-  const entry = d.o[e]*(1+slip), tp = entry*(1+mag), sl = entry*(1-mag);
+  if(e >= d.t.length) return {state:"pending", ref:d.c[i], tp:d.c[i]*(1+sd*mag), sl:d.c[i]*(1-sd*mag)};
+  const entry = d.o[e]*(1+sd*slip), tp = entry*(1+sd*mag), sl = entry*(1-sd*mag);
+  const ret = x => sd*(x/entry - 1);
   for(let j=e; j<e+CFG.hold && j<d.t.length; j++){
-    if(j > e && d.o[j] <= sl) return {state:"stop", entry, tp, sl, net:d.o[j]*(1-slip)/entry - 1 - 2*tk};
-    if(d.l[j] <= sl) return {state:"stop", entry, tp, sl, net:sl*(1-slip)/entry - 1 - 2*tk};
-    if(d.h[j] > tp) return {state:"target", entry, tp, sl, net:tp/entry - 1 - tk - mk};
+    const gap = j > e && (sd > 0 ? d.o[j] <= sl : d.o[j] >= sl);
+    if(gap) return {state:"stop", entry, tp, sl, net:ret(d.o[j]*(1-sd*slip)) - 2*tk};
+    if(sd > 0 ? d.l[j] <= sl : d.h[j] >= sl) return {state:"stop", entry, tp, sl, net:ret(sl*(1-sd*slip)) - 2*tk};
+    if(sd > 0 ? d.h[j] > tp : d.l[j] < tp) return {state:"target", entry, tp, sl, net:ret(tp) - tk - mk};
   }
   const x = e + CFG.hold;
-  if(x < d.t.length) return {state:"time exit", entry, tp, sl, net:d.o[x]*(1-slip)/entry - 1 - 2*tk};
+  if(x < d.t.length) return {state:"time exit", entry, tp, sl, net:ret(d.o[x]*(1-sd*slip)) - 2*tk};
   return {state:"open", entry, tp, sl};
 }
 function compute(){
@@ -217,11 +230,12 @@ function compute(){
     for(const k of CFG.ks){
       const f = features(d, fmap, k);
       row.z[k] = f.rz[n-1]; if(k === 15){ row.move = f.resid[n-1]*1e4; row.fz = f.fz[n-1]; }
-      if(cls(sym) !== "crypto" || sym === "BTCUSDT") continue;      // only the group with an in-sample edge
+      if(!fmap) continue;                                           // the factor itself (BTC, gold)
       for(let i=0;i<n;i++){
         const mag = Math.abs(f.resid[i]);
-        if(f.rz[i] <= -CFG.z && mag*1e4 >= CFG.minBp && Math.abs(f.fz[i]) >= CFG.fz)
-          signals.push({time:d.t[i], symbol:sym, side:"LONG", k, moveBp:f.resid[i]*1e4, z:f.rz[i], btcZ:f.fz[i], isNow:i === n-1, ...outcome(d, i, mag, sym)});
+        if(!(mag*1e4 >= CFG.minBp && Math.abs(f.fz[i]) >= CFG.fz)) continue;
+        const sd = f.rz[i] <= -CFG.z ? 1 : f.rz[i] >= CFG.z ? -1 : 0;
+        if(sd) signals.push({time:d.t[i], symbol:sym, side:sd > 0 ? "LONG" : "SHORT", cls:cls(sym), k, moveBp:f.resid[i]*1e4, z:f.rz[i], btcZ:f.fz[i], isNow:i === n-1, ...outcome(d, i, mag, sym, sd)});
       }
     }
     watch.push(row);
@@ -240,10 +254,12 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":
 function render(res){
   const sb = $("sig").tBodies[0];
   const side = s => `<span class="side ${s.side.toLowerCase()}">${s.side}</span>`;
+  const rec = s => { const r = RECORD[s.cls + "|" + s.side]; return r ? `${r[1] > 0 ? "+" : ""}${r[1]} bp/trade, ${r[3]}% win (n=${r[2]})` : "–"; };
+  $("bt").tBodies[0].innerHTML = Object.entries(RECORD).map(([k, r]) => { const [g, sd] = k.split("|"); return `<tr><td class="l">${g.replace("_"," ")}</td><td class="l"><span class="side ${sd.toLowerCase()}">${sd}</span></td><td class="${r[0]>0?"pos":"neg"}">${r[0]} bp</td><td class="${r[1]>0?"pos":"neg"}">${r[1]} bp</td><td>${r[2]}</td><td>${r[3]}%</td></tr>`; }).join("");
   const live = res.signals.filter(s => s.isNow);
-  $("cards").innerHTML = live.map(s => `<div class="card ${s.side.toLowerCase()}"><h3>${side(s)} ${esc(s.symbol)}</h3><dl><dt>Entry</dt><dd>≈ ${px(s.ref)}</dd><dt>Take profit</dt><dd>${px(s.tp)}</dd><dt>Stop loss</dt><dd>${px(s.sl)}</dd><dt>Time exit</dt><dd>${CFG.hold} min</dd></dl><small>${s.k}m move ${num(s.moveBp,0)} bp, z ${num(s.z)}. Enter at market on the next bar; entry is the last close, so levels shift slightly with your fill.</small></div>`).join("");
+  $("cards").innerHTML = live.map(s => `<div class="card ${s.side.toLowerCase()}"><h3>${side(s)} ${esc(s.symbol)}</h3><dl><dt>Entry</dt><dd>≈ ${px(s.ref)}</dd><dt>Take profit</dt><dd>${px(s.tp)}</dd><dt>Stop loss</dt><dd>${px(s.sl)}</dd><dt>Time exit</dt><dd>${CFG.hold} min</dd></dl><small>${s.k}m move ${num(s.moveBp,0)} bp, z ${num(s.z)} (${s.cls.replace("_"," ")}). Enter at market on the next bar; entry is the last close, so levels shift slightly with your fill.</small><small class="bt">Held-out record for this type: ${rec(s)}</small></div>`).join("");
   $("cardsEmpty").style.display = live.length ? "none" : "";
-  sb.innerHTML = res.signals.slice(0,200).map(s => `<tr class="${s.isNow?"now":""}"><td>${utc(s.time)}</td><td class="l">${esc(s.symbol)}</td><td class="l">${side(s)}</td><td>${px(s.entry ?? s.ref)}${s.entry?"":' <span class="tag">ref</span>'}</td><td>${px(s.tp)}</td><td>${px(s.sl)}</td><td>${s.k}m</td><td>${num(s.moveBp,0)} bp</td><td>${num(s.z)}</td><td>${num(s.btcZ)}</td><td class="l">${s.state}</td><td class="${s.net>0?"pos":s.net<0?"neg":"mute"}">${s.net===undefined?"–":num(s.net*1e4,0)+" bp"}</td></tr>`).join("");
+  sb.innerHTML = res.signals.slice(0,200).map(s => `<tr class="${s.isNow?"now":""}"><td>${utc(s.time)}</td><td class="l">${esc(s.symbol)}</td><td class="l">${side(s)}</td><td>${px(s.entry ?? s.ref)}${s.entry?"":' <span class="tag">ref</span>'}</td><td>${px(s.tp)}</td><td>${px(s.sl)}</td><td>${s.k}m</td><td>${num(s.moveBp,0)} bp</td><td>${num(s.z)}</td><td>${num(s.btcZ)}</td><td class="l mute">${s.cls.replace("_"," ")}</td><td class="l">${s.state}</td><td class="${s.net>0?"pos":s.net<0?"neg":"mute"}">${s.net===undefined?"–":num(s.net*1e4,0)+" bp"}</td><td class="l bt">${rec(s)}</td></tr>`).join("");
   $("sigEmpty").style.display = res.signals.length ? "none" : "";
   $("sigEmpty").textContent = "No signals in the loaded window (about the last 24 hours).";
   const z = v => `<td class="${v <= -CFG.z ? "neg" : ""}">${num(v)}</td>`;

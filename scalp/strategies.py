@@ -59,3 +59,6 @@ def snapback_signals(feat: pd.DataFrame, p: SnapbackParams) -> pd.DataFrame:
 
 # Frozen on in-sample data (2025-07 .. 2026-06) BEFORE the out-of-sample run. Do not tune on OOS.
 FROZEN = tuple(SnapbackParams(k=k) for k in (5, 10, 15))
+
+# Both directions, as requested for the scanners. Shorts LOST money in every backtest group (RESULTS.md).
+BOTH_SIDES = tuple(SnapbackParams(k=k, z_short=6.0) for k in (5, 10, 15))
