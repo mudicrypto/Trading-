@@ -12,6 +12,7 @@ place orders and should not be used to trade real money.
 - `scalp/backtest.py` - 1-minute trade simulator with conservative fills and fees
 - `scalp/strategies.py` - signal functions shared by the backtest and the scanner; `FROZEN` is the tested rule
 - `scalp/scanner.py` - live or replay scanner
+- `scanner.html` - the same scanner as a single web page; open it in a browser and press Start
 - `research/` - the studies behind RESULTS.md
 - `tests/` - engine and no-look-ahead tests
 
@@ -27,3 +28,11 @@ The live mode reads public klines from `fapi.binance.com` or `api.bybit.com`. Bo
 (HTTP 451 / 403), so run it from a machine in a supported region; `BINANCE_FAPI_URL` and `BYBIT_API_URL`
 override the base URLs. The live fetchers could not be exercised from the development container for that reason.
 No API key is needed.
+
+## Browser scanner
+
+Open `scanner.html` in a browser, pick Binance or Bybit and press Start. It fetches public klines directly from
+the exchange in your browser, rescans just after each minute closes, and lists signals with entry, target, stop
+and the outcome of past signals in the loaded window (about 24 hours). It uses the same rule and maths as
+`scalp/strategies.py`; on cached data its signals match the Python scanner exactly. If the exchange blocks your
+region or network the page says so.

@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dislocation Scanner</title>
+<style>
+:root{--bg:#f6f7f9;--panel:#fff;--ink:#16191d;--mute:#667080;--line:#dfe3e8;--accent:#1f6feb;--good:#0a7d3c;--bad:#c22f2f;--warn-bg:#fff4d6;--warn-ink:#6b4a00;--hot:#fde8e8}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1216;--panel:#171b21;--ink:#e7eaee;--mute:#8f99a8;--line:#2a313a;--accent:#5aa2ff;--good:#3fcf7f;--bad:#ff6b6b;--warn-bg:#3a2f0c;--warn-ink:#ffd978;--hot:#3a1d1d}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:1180px;margin:0 auto;padding:16px}
+h1{font-size:20px;margin:0 0 4px}
+h2{font-size:15px;margin:0 0 8px}
+.sub{color:var(--mute);margin:0 0 12px}
+.warn{background:var(--warn-bg);color:var(--warn-ink);border-radius:8px;padding:10px 12px;margin:0 0 12px}
+.bar{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;margin:0 0 12px}
+select,button{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:6px 10px}
+button{cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+label{display:inline-flex;gap:6px;align-items:center;color:var(--mute)}
+#status{color:var(--mute)}
+#status.err{color:var(--bad)}
+section{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin:0 0 14px}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;white-space:nowrap}
+th,td{padding:5px 9px;text-align:right;border-bottom:1px solid var(--line)}
+th{color:var(--mute);font-weight:600;font-size:12px}
+th:first-child,td:first-child,th.l,td.l{text-align:left}
+tr.now td{background:var(--hot)}
+.pos{color:var(--good)}.neg{color:var(--bad)}.mute{color:var(--mute)}
+.tag{display:inline-block;border:1px solid var(--line);border-radius:4px;padding:0 5px;font-size:11px;color:var(--mute)}
+.empty{color:var(--mute);padding:8px 0}
+</style>
+</head>
+<body>
+<main>
+<h1>Dislocation Scanner</h1>
+<p class="sub">Binance USDT-M futures and Bybit linear perps. Reads public 1-minute klines in your browser; places no orders, needs no API key.</p>
+<p class="warn"><strong>Research alerts only.</strong> This rule made money on the design data but showed no edge on held-out data (+2 bp per trade, t = 0.35). See RESULTS.md. Do not trade it with real money.</p>
+
+<div class="bar">
+  <select id="venue" aria-label="Venue"><option value="binance">Binance futures</option><option value="bybit">Bybit linear</option></select>
+  <button id="go" class="primary">Start</button>
+  <label><input type="checkbox" id="sound"> Sound on new signal</label>
+  <label><input type="checkbox" id="extra"> Show stock and metal perps (watch only)</label>
+  <span id="status">Idle.</span>
+</div>
+
+<section>
+  <h2>Signals</h2>
+  <p class="sub">Long when an alt drops at least 6σ and 100 bp relative to BTC over 5, 10 or 15 minutes while BTC is also moving (|z| ≥ 2). Enter at the next bar's open; target and stop are each 1× the drop; exit after 15 minutes. Result is net of fees and slippage.</p>
+  <div class="scroll"><table id="sig"><thead><tr>
+    <th>Time (UTC)</th><th class="l">Symbol</th><th>Lookback</th><th>Drop</th><th>z</th><th>BTC z</th><th>Entry</th><th>Target</th><th>Stop</th><th class="l">Outcome</th><th>Net</th>
+  </tr></thead><tbody></tbody></table></div>
+  <div id="sigEmpty" class="empty">No signals yet.</div>
+</section>
+
+<section>
+  <h2>Watchlist</h2>
+  <p class="sub">Residual z-score against the factor (BTC for crypto, a basket for stocks, gold for silver), most stretched first.</p>
+  <div class="scroll"><table id="watch"><thead><tr>
+    <th class="l">Symbol</th><th class="l">Class</th><th>Last</th><th>z 5m</th><th>z 10m</th><th>z 15m</th><th>Move 15m</th><th>Factor z 15m</th>
+  </tr></thead><tbody></tbody></table></div>
+</section>
+</main>
+
+<script>
+"use strict";
+// ---- configuration: mirrors scalp/strategies.py FROZEN and scalp/universe.py ----
+const CFG = {ks:[5,10,15], z:6, minBp:100, fz:2, hold:15, DAY:1440, NEED:2940, maker:2};
+const MAJORS = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT","DOGEUSDT"];
+const ALTS = ["ADAUSDT","LINKUSDT","AVAXUSDT","SUIUSDT","TRXUSDT","LTCUSDT","DOTUSDT","BCHUSDT","NEARUSDT","APTUSDT","ARBUSDT","OPUSDT","UNIUSDT","AAVEUSDT","FILUSDT","ATOMUSDT","INJUSDT","TIAUSDT","SEIUSDT","WLDUSDT","ENAUSDT","HYPEUSDT","1000PEPEUSDT","1000SHIBUSDT","WIFUSDT","1000BONKUSDT","FARTCOINUSDT","TRUMPUSDT","ONDOUSDT","TAOUSDT","HBARUSDT","XLMUSDT","ETCUSDT","CRVUSDT","LDOUSDT","PENGUUSDT","ZECUSDT"];
+const CRYPTO = MAJORS.concat(ALTS);
+const CRYPTO_STOCKS = ["MSTRUSDT","COINUSDT","HOODUSDT"];
+const STOCKS = ["TSLAUSDT","NVDAUSDT","AAPLUSDT","METAUSDT","GOOGLUSDT","MSFTUSDT","AMZNUSDT"];
+const METALS = ["XAUUSDT","XAGUSDT"];
+const BYBIT_NAME = {"1000SHIBUSDT":"SHIB1000USDT"};
+const Q = new URLSearchParams(location.search);
+const BASE = {binance: Q.get("binance") || "https://fapi.binance.com", bybit: Q.get("bybit") || "https://api.bybit.com"};
+window.__now = Q.get("now") ? Number(Q.get("now")) : null;      // fixed clock for replay / tests
+const nowMs = () => window.__now ?? Date.now();
+
+const cls = s => CRYPTO_STOCKS.includes(s) ? "crypto_stock" : STOCKS.includes(s) ? "stock" : METALS.includes(s) ? "metal" : "crypto";
+const slipBp = s => s === "ADAUSDT" ? 3 : (cls(s) === "stock" || cls(s) === "crypto_stock") ? 1.5 : 1;
+
+// ---- data ----
+const data = {};                       // symbol -> {t,o,h,l,c}
+let venue = "binance", timer = null, running = false, seen = new Set(), firstScan = true;
+
+async function getJson(url){
+  const r = await fetch(url);
+  if(!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}
+async function fetchBars(sym, limit, end){
+  if(venue === "binance"){
+    const rows = await getJson(`${BASE.binance}/fapi/v1/klines?symbol=${sym}&interval=1m&limit=${Math.min(limit,1500)}&endTime=${end}`);
+    return rows.map(x => [Number(x[0]),+x[1],+x[2],+x[3],+x[4]]);
+  }
+  const j = await getJson(`${BASE.bybit}/v5/market/kline?category=linear&symbol=${BYBIT_NAME[sym]||sym}&interval=1&limit=${Math.min(limit,1000)}&end=${end}`);
+  if(j.retCode !== 0) throw new Error(j.retMsg || "Bybit error");
+  return j.result.list.map(x => [Number(x[0]),+x[1],+x[2],+x[3],+x[4]]).reverse();   // Bybit is newest first
+}
+async function refresh(sym){
+  const closedBefore = Math.floor(nowMs()/60000)*60000;       // bars opening at or after this are still forming
+  let d = data[sym];
+  const lastT = d && d.t.length ? d.t[d.t.length-1] : null;
+  let want = lastT === null ? CFG.NEED + 1 : Math.round((closedBefore - lastT)/60000) + 1;   // +1: the forming bar is dropped
+  if(want > CFG.NEED + 1){ d = null; want = CFG.NEED + 1; }              // tab slept too long: reload
+  let rows = [], end = nowMs();
+  while(want > 0){
+    const got = await fetchBars(sym, want, end);
+    if(!got.length) break;
+    rows = got.concat(rows); end = got[0][0] - 1; want -= got.length;
+  }
+  if(!d) d = data[sym] = {t:[],o:[],h:[],l:[],c:[]};
+  for(const x of rows){
+    if(x[0] >= closedBefore) continue;
+    if(d.t.length && x[0] <= d.t[d.t.length-1]) continue;
+    d.t.push(x[0]); d.o.push(x[1]); d.h.push(x[2]); d.l.push(x[3]); d.c.push(x[4]);
+  }
+  const drop = d.t.length - CFG.NEED;
+  if(drop > 0) for(const k of "tohlc") d[k].splice(0, drop);
+}
+async function pool(items, n, fn){
+  let i = 0; const errs = {};
+  await Promise.all(Array.from({length:n}, async () => {
+    while(i < items.length){ const s = items[i++]; try{ await fn(s); }catch(e){ errs[s] = e.message || String(e); } }
+  }));
+  return errs;
+}
+
+// ---- features: same maths as scalp/strategies.py residual_features ----
+function logret(d){ const m = new Map(); for(let i=1;i<d.c.length;i++) m.set(d.t[i], Math.log(d.c[i]/d.c[i-1])); return m; }
+function factorFor(sym, lr){
+  const c = cls(sym);
+  if(c === "crypto" || c === "crypto_stock") return sym === "BTCUSDT" ? null : lr.BTCUSDT || null;
+  if(c === "metal") return sym === "XAUUSDT" ? null : lr.XAUUSDT || null;
+  const others = STOCKS.filter(s => s !== sym && lr[s]); if(!others.length) return null;
+  const m = new Map();
+  for(const t of data[sym].t){ let s = 0, n = 0; for(const o of others){ const v = lr[o].get(t); if(v !== undefined){ s += v; n++; } } if(n) m.set(t, s/n); }
+  return m;
+}
+// rolling std (ddof 1) of a[i-win+1..i], NaN-aware, needing at least minp finite values
+function rollStd(a, win, minp){
+  const n = a.length, out = new Float64Array(n).fill(NaN); let s = 0, s2 = 0, c = 0;
+  for(let i=0;i<n;i++){
+    if(isFinite(a[i])){ s += a[i]; s2 += a[i]*a[i]; c++; }
+    if(i >= win && isFinite(a[i-win])){ s -= a[i-win]; s2 -= a[i-win]*a[i-win]; c--; }
+    if(c >= minp && c > 1) out[i] = Math.sqrt(Math.max(0, (s2 - s*s/c)/(c-1)));
+  }
+  return out;
+}
+function features(d, fmap, k){
+  const n = d.c.length, D = CFG.DAY;
+  const ra = new Float64Array(n).fill(NaN), rf = new Float64Array(n).fill(NaN), resid = new Float64Array(n).fill(NaN);
+  const rz = new Float64Array(n).fill(NaN), fz = new Float64Array(n);
+  const lc = d.c.map(Math.log);
+  for(let i=k;i<n;i++) ra[i] = lc[i] - lc[i-k];
+  if(!fmap){ resid.set(ra); }
+  else{
+    const f1 = d.t.map(t => fmap.get(t) ?? 0); let acc = 0;
+    for(let i=0;i<n;i++){ acc += f1[i]; if(i >= k) acc -= f1[i-k]; if(i >= k-1) rf[i] = acc; }
+    // beta = rolling cov(ra, rf) / var(rf) over a full day, lagged one bar, clipped to [-1, 4], default 1
+    const beta = new Float64Array(n).fill(NaN); let sx=0, sy=0, sxy=0, syy=0, c=0;
+    const ok = i => isFinite(ra[i]) && isFinite(rf[i]);
+    for(let i=0;i<n;i++){
+      if(ok(i)){ sx+=ra[i]; sy+=rf[i]; sxy+=ra[i]*rf[i]; syy+=rf[i]*rf[i]; c++; }
+      if(i >= D && ok(i-D)){ const j=i-D; sx-=ra[j]; sy-=rf[j]; sxy-=ra[j]*rf[j]; syy-=rf[j]*rf[j]; c--; }
+      if(c === D){ const v = syy - sy*sy/c; if(v > 0) beta[i] = (sxy - sx*sy/c)/v; }
+    }
+    for(let i=0;i<n;i++){
+      let b = i > 0 ? beta[i-1] : NaN; b = isFinite(b) ? Math.min(4, Math.max(-1, b)) : 1;
+      resid[i] = ra[i] - b*rf[i];
+    }
+    const fsd = rollStd(rf, D, D/2);
+    for(let i=1;i<n;i++) fz[i] = rf[i]/fsd[i-1];
+  }
+  const sd = rollStd(resid, D, D/2);
+  for(let i=1;i<n;i++) rz[i] = resid[i]/sd[i-1];
+  return {resid, rz, fz};
+}
+// outcome with the backtest's rules: next-bar-open entry, stop first, strict target, time stop
+function outcome(d, i, mag, sym){
+  const e = i + 1, slip = slipBp(sym)/1e4, tk = (venue === "bybit" ? 5.5 : 5)/1e4, mk = CFG.maker/1e4;
+  if(e >= d.t.length) return {state:"pending", ref:d.c[i], tp:d.c[i]*(1+mag), sl:d.c[i]*(1-mag)};
+  const entry = d.o[e]*(1+slip), tp = entry*(1+mag), sl = entry*(1-mag);
+  for(let j=e; j<e+CFG.hold && j<d.t.length; j++){
+    if(j > e && d.o[j] <= sl) return {state:"stop", entry, tp, sl, net:d.o[j]*(1-slip)/entry - 1 - 2*tk};
+    if(d.l[j] <= sl) return {state:"stop", entry, tp, sl, net:sl*(1-slip)/entry - 1 - 2*tk};
+    if(d.h[j] > tp) return {state:"target", entry, tp, sl, net:tp/entry - 1 - tk - mk};
+  }
+  const x = e + CFG.hold;
+  if(x < d.t.length) return {state:"time exit", entry, tp, sl, net:d.o[x]*(1-slip)/entry - 1 - 2*tk};
+  return {state:"open", entry, tp, sl};
+}
+function compute(){
+  const lr = {}; for(const s in data) lr[s] = logret(data[s]);
+  const signals = [], watch = [];
+  for(const sym in data){
+    const d = data[sym], n = d.t.length; if(n < CFG.DAY + 20) continue;
+    const fmap = factorFor(sym, lr), row = {symbol:sym, cls:cls(sym), last:d.c[n-1], z:{}};
+    for(const k of CFG.ks){
+      const f = features(d, fmap, k);
+      row.z[k] = f.rz[n-1]; if(k === 15){ row.move = f.resid[n-1]*1e4; row.fz = f.fz[n-1]; }
+      if(cls(sym) !== "crypto" || sym === "BTCUSDT") continue;      // only the group with an in-sample edge
+      for(let i=0;i<n;i++){
+        const mag = Math.abs(f.resid[i]);
+        if(f.rz[i] <= -CFG.z && mag*1e4 >= CFG.minBp && Math.abs(f.fz[i]) >= CFG.fz)
+          signals.push({time:d.t[i], symbol:sym, k, moveBp:f.resid[i]*1e4, z:f.rz[i], btcZ:f.fz[i], isNow:i === n-1, ...outcome(d, i, mag, sym)});
+      }
+    }
+    watch.push(row);
+  }
+  signals.sort((a,b) => b.time - a.time || a.symbol.localeCompare(b.symbol) || a.k - b.k);
+  watch.sort((a,b) => Math.min(...CFG.ks.map(k => isFinite(a.z[k]) ? a.z[k] : 0)) - Math.min(...CFG.ks.map(k => isFinite(b.z[k]) ? b.z[k] : 0)));
+  return {signals, watch};
+}
+
+// ---- rendering ----
+const $ = id => document.getElementById(id);
+const px = v => v === undefined ? "" : v >= 1000 ? v.toFixed(1) : v >= 1 ? v.toFixed(3) : v.toPrecision(4);
+const num = (v, d=1) => isFinite(v) ? v.toFixed(d) : "–";
+const utc = t => new Date(t).toISOString().slice(5,16).replace("T"," ");
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function render(res){
+  const sb = $("sig").tBodies[0];
+  sb.innerHTML = res.signals.slice(0,200).map(s => `<tr class="${s.isNow?"now":""}"><td>${utc(s.time)}</td><td class="l">${esc(s.symbol)}</td><td>${s.k}m</td><td>${num(s.moveBp,0)} bp</td><td>${num(s.z)}</td><td>${num(s.btcZ)}</td><td>${px(s.entry ?? s.ref)}${s.entry?"":' <span class="tag">ref</span>'}</td><td>${px(s.tp)}</td><td>${px(s.sl)}</td><td class="l">${s.state}</td><td class="${s.net>0?"pos":s.net<0?"neg":"mute"}">${s.net===undefined?"–":num(s.net*1e4,0)+" bp"}</td></tr>`).join("");
+  $("sigEmpty").style.display = res.signals.length ? "none" : "";
+  $("sigEmpty").textContent = "No signals in the loaded window (about the last 24 hours).";
+  const z = v => `<td class="${v <= -CFG.z ? "neg" : ""}">${num(v)}</td>`;
+  $("watch").tBodies[0].innerHTML = res.watch.map(w => `<tr><td class="l">${esc(w.symbol)}</td><td class="l mute">${w.cls.replace("_"," ")}</td><td>${px(w.last)}</td>${CFG.ks.map(k => z(w.z[k])).join("")}<td>${num(w.move,0)} bp</td><td>${num(w.fz)}</td></tr>`).join("");
+}
+function beep(){ try{ const a = new AudioContext(), o = a.createOscillator(), g = a.createGain(); o.connect(g); g.connect(a.destination); o.frequency.value = 880; g.gain.value = .1; o.start(); o.stop(a.currentTime + .25); }catch(e){} }
+function status(msg, err){ $("status").textContent = msg; $("status").className = err ? "err" : ""; }
+
+async function scanOnce(){
+  const syms = CRYPTO.concat($("extra").checked ? CRYPTO_STOCKS.concat(STOCKS, METALS) : []);
+  for(const s in data) if(!syms.includes(s)) delete data[s];
+  const loading = Object.keys(data).length === 0;
+  if(loading) status(`Loading ${syms.length} symbols from ${venue}…`);
+  const errs = await pool(syms, 6, refresh), bad = Object.keys(errs);
+  if(!data.BTCUSDT || !data.BTCUSDT.t.length){
+    status(`Could not load data from ${venue} (${errs.BTCUSDT || "no data"}). The exchange may block your region or network; try the other venue.`, true);
+    return window.__scan = {signals:[], watch:[], errors:errs};
+  }
+  const res = compute(); res.errors = errs; render(res);
+  const fresh = res.signals.filter(s => s.isNow && !seen.has(s.time + s.symbol + s.k));
+  res.signals.forEach(s => seen.add(s.time + s.symbol + s.k));
+  if(fresh.length && !firstScan && $("sound").checked) beep();
+  firstScan = false;
+  const last = data.BTCUSDT.t[data.BTCUSDT.t.length-1];
+  status(`${venue}: ${res.watch.length} symbols, last closed bar ${utc(last)} UTC, ${res.signals.filter(s => s.isNow).length} signal(s) now` + (bad.length ? `. Skipped ${bad.length}: ${bad.slice(0,6).join(", ")}${bad.length>6?"…":""}` : "."));
+  return window.__scan = res;
+}
+window.scanOnce = scanOnce;
+async function loop(){
+  if(!running) return;
+  try{ await scanOnce(); }catch(e){ status("Scan failed: " + (e.message || e), true); }
+  if(running) timer = setTimeout(loop, 60000 - Date.now() % 60000 + 3000);   // just after each minute closes
+}
+$("go").onclick = () => {
+  running = !running; $("go").textContent = running ? "Stop" : "Start"; $("go").classList.toggle("primary", !running);
+  clearTimeout(timer); if(running) loop(); else status("Stopped.");
+};
+$("venue").onchange = e => { venue = e.target.value; for(const s in data) delete data[s]; seen = new Set(); firstScan = true; if(running){ clearTimeout(timer); loop(); } };
+$("extra").onchange = () => { if(running){ clearTimeout(timer); loop(); } };
+</script>
+</body>
+</html>
